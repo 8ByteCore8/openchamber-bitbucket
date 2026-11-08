@@ -7,14 +7,14 @@ Bitbucket Cloud pull requests inside [OpenChamber](https://openchamber.dev), nex
 **Work Status section "Bitbucket PR"**: the pull request of the branch checked out in the open project.
 
 - Title, Pipelines result, approvals, requested changes, target branch.
-- Actions that fit your role: **Merge** (with the repository's merge strategies) and **Агенту** (hand to the agent) on your own PR, **Approve** and **Request changes** on someone else's. Draft/ready and decline sit under **Ещё** (more).
-- No PR for the branch yet: **Создать PR** (create PR) right there.
+- Actions that fit your role: **Merge** (with the repository's merge strategies) and **To agent** on your own PR, **Approve** and **Request changes** on someone else's. Draft/ready and **Decline** sit under **More**.
+- No PR for the branch yet: **Create PR** right there.
 
 **Rail panel "Bitbucket"**: the open pull requests of a repository.
 
-- Tabs: **Мои** (mine), **Жду ревью** (awaiting my review), **Все открытые** (all open), plus search by title.
+- Tabs: **Mine**, **Awaiting my review**, **All open**, plus search by title.
 - A pull request in detail: description (editable), diff, general comments with a reply box, reviewers (add and remove from the workspace members).
-- A **Новый PR** (new PR) form with the repository's default reviewers.
+- A **New PR** form with the repository's default reviewers.
 
 **Hand a PR to the agent**: puts a pull-request chip on the chat composer with the PR's title, branches, description and diff. A long diff is cut to fit, and the chip says so.
 
@@ -32,10 +32,15 @@ The extension reads the open project's git files: the project itself and its **s
 
 ## Behaviour worth knowing
 
-- **Quiet by design.** Nothing polls. The section reads Bitbucket when it appears, when you switch project, and on **Обновить** (refresh). After switching branches, press it.
+- **Quiet by design.** Nothing polls. The section reads Bitbucket when it appears, when you switch project, and on **Refresh**. After switching branches, press **Refresh**.
 - **Merge and Decline ask twice.** Merge asks you to pick a strategy; Decline asks you to confirm, because Bitbucket Cloud can't reopen a declined PR.
 - **Merge runs asynchronously** (`async=true`). When Bitbucket runs it as a task, you are told to refresh in a few seconds.
-- **The UI is in Russian** for now; this README gives each button name with a translation.
+
+## Languages
+
+The interface follows OpenChamber's language: English, German, French, Dutch, Simplified and Traditional Chinese, Ukrainian, Spanish, Brazilian Portuguese, Korean, Polish, Japanese, Turkish, Arabic and Hebrew (right to left), plus Russian. Dates use the language's own format.
+
+English is the original. The other translations were not written by native speakers, so corrections are welcome: each language is one file in `src/i18n/`, and `bun run check` verifies that every file has every key with the same `{placeholders}`. Menu paths such as Settings → Integrations stay in English in every language.
 
 ## Limits
 

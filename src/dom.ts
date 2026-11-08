@@ -1,6 +1,8 @@
 // Small DOM helpers and the page's own styles. Controls come from the SDK kit;
 // this only lays them out and draws text, diff and comment blocks in host colours.
 
+import { t } from './i18n/index.ts';
+
 const STYLE = `
 :root { color-scheme: light dark; }
 html, body { margin: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); font-size: 13px; }
@@ -15,10 +17,10 @@ html, body { margin: 0; background: var(--oc-bg); color: var(--oc-fg); font-fami
 .bb-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bb-meta { display: flex; flex-wrap: wrap; column-gap: 8px; row-gap: 0; }
 .bb-h { font-weight: 600; margin: 4px 0 0; }
-.bb-mono { font-family: var(--oc-mono); }
+.bb-mono { font-family: var(--oc-mono); direction: ltr; unicode-bidi: isolate; }
 .bb-card { background: var(--oc-muted-surface); border-radius: var(--oc-radius); padding: 8px 10px; }
 .bb-pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-.bb-diff { font-family: var(--oc-mono); font-size: 12px; line-height: 1.45; background: var(--oc-muted-surface); border-radius: var(--oc-radius); overflow-x: auto; padding: 6px 0; }
+.bb-diff { direction: ltr; text-align: left; font-family: var(--oc-mono); font-size: 12px; line-height: 1.45; background: var(--oc-muted-surface); border-radius: var(--oc-radius); overflow-x: auto; padding: 6px 0; }
 .bb-diff div { white-space: pre; padding: 0 10px; min-height: 1.45em; }
 .bb-diff .add { background: color-mix(in srgb, var(--oc-success) 16%, transparent); }
 .bb-diff .del { background: color-mix(in srgb, var(--oc-error) 16%, transparent); }
@@ -52,16 +54,6 @@ export const clear = (node: HTMLElement) => {
   return node;
 };
 
-export const relativeTime = (iso: string) => {
-  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return 'только что';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} мин назад`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours} ч назад`;
-  return `${Math.round(hours / 24)} дн назад`;
-};
-
 const DIFF_LINES_MAX = 4000;
 
 /** Draws a unified diff, colouring files, hunks, additions and deletions. */
@@ -83,7 +75,7 @@ export const renderDiff = (parent: HTMLElement, diff: string) => {
     node.append(row);
   }
   if (lines.length > DIFF_LINES_MAX) {
-    node.append(el('div', 'hunk', `… ещё ${lines.length - DIFF_LINES_MAX} строк, откройте PR в Bitbucket`));
+    node.append(el('div', 'hunk', `… ${t('diffMore', { count: lines.length - DIFF_LINES_MAX })}`));
   }
   return node;
 };

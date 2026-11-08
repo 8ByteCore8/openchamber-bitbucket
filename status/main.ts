@@ -4,14 +4,15 @@ import { createApi, describeError, repoKey, type CommitStatus, type PullRequest 
 import { mountPrActions } from '../src/actions.ts';
 import { mountCreateForm } from '../src/create.ts';
 import { box, clear, el, installStyle } from '../src/dom.ts';
-import { detectRepos, isDefaultBranch, localId, localLabel, pickKey, preferredRepo, type LocalRepo } from '../src/repo.ts';
+import { isolate, setLocale, t } from '../src/i18n/index.ts';
+import { detectRepos, isDefaultBranch, localId, localLabel, pickKey, preferredRepo, type Detection, type LocalRepo } from '../src/repo.ts';
 import { renderPrCompact } from '../src/summary.ts';
 
 // Work Status section: the PR of the branch checked out in the open project.
 // It reads Bitbucket when it appears, when the project or the connection
-// changes, and on "Обновить"; it never polls. Repository and "Обновить" go
+// changes, and on "Refresh"; it never polls. Repository and "Refresh" go
 // into the section header when the host supports header controls, so the
-// body keeps to the PR itself.
+// body keeps to the PR itself. Text follows OpenChamber's language.
 
 const host = connectHost();
 const api = createApi(host);
@@ -53,12 +54,12 @@ const publishControls = () => {
     controls.push({
       kind: 'select',
       id: 'repo',
-      label: 'Репозиторий',
+      label: t('repository'),
       value: localId(current),
       options: repos.map((local) => ({ value: localId(local), label: localLabel(local).slice(0, 60) })),
     });
   }
-  controls.push({ kind: 'button', id: 'refresh', label: 'Обновить' });
+  controls.push({ kind: 'button', id: 'refresh', label: t('refresh') });
   host.setStatusControls(controls).catch(() => {
     headerControls = false;
     void showPullRequest();
@@ -68,22 +69,22 @@ const publishControls = () => {
 /** Body entries for what the header would hold on hosts without header controls. */
 const fallbackExtras = () => {
   const extras: { label: string; run: () => void }[] = [];
-  if (repos.length > 1 && (!headerControls || repos.length > 16)) extras.push({ label: 'Репозиторий', run: showPicker });
-  if (!headerControls) extras.push({ label: 'Обновить', run: () => void load() });
+  if (repos.length > 1 && (!headerControls || repos.length > 16)) extras.push({ label: t('repository'), run: showPicker });
+  if (!headerControls) extras.push({ label: t('refresh'), run: () => void load() });
   return extras;
 };
 
 const showPicker = () => {
   generation++;
   clear(root);
-  root.append(el('div', 'bb-small bb-muted', 'Какой репозиторий показывать в этом проекте:'));
+  root.append(el('div', 'bb-small bb-muted', t('pickRepo')));
   mountList(box(root), {
-    ariaLabel: 'Репозитории проекта',
+    ariaLabel: t('projectRepos'),
     items: repos.map((local) => ({ id: localId(local), title: localLabel(local), subtitle: repoKey(local.repo) })),
     selectedId: current ? localId(current) : undefined,
     onSelect: choose,
   });
-  mountButton(box(root, 'bb-row'), { label: 'Назад', variant: 'ghost', size: 'xs', onClick: () => void showPullRequest() });
+  mountButton(box(root, 'bb-row'), { label: t('back'), variant: 'ghost', size: 'xs', onClick: () => void showPullRequest() });
 };
 
 const showCreate = () => {
@@ -114,13 +115,13 @@ const showPullRequest = async () => {
   publishControls();
   const local = current;
   if (!local) return;
-  const where = local.path ? `${local.path}: ` : '';
+  const where = local.path ? `${isolate(local.path)}: ` : '';
   if (!local.branch) {
-    note(root, `${where}HEAD отсоединён. Все PR — в панели Bitbucket.`);
+    note(root, `${where}${t('detached')}`);
     return;
   }
   const body = box(root);
-  mountSpinner(body, { size: 'sm', label: 'Ищу PR…' });
+  mountSpinner(body, { size: 'sm', label: t('findingPr') });
   let pr: PullRequest | null;
   let statuses: CommitStatus[] | null = null;
   let meUuid = '';
@@ -134,14 +135,15 @@ const showPullRequest = async () => {
   } catch (error) {
     if (mine !== generation) return;
     clear(body);
-    mountBanner(body, { tone: 'error', title: 'Bitbucket не ответил', body: describeError(error), action: { label: 'Повторить', onClick: () => void showPullRequest() } });
+    mountBanner(body, { tone: 'error', title: t('noAnswer'), body: describeError(error), action: { label: t('retry'), onClick: () => void showPullRequest() } });
     return;
   }
   if (mine !== generation) return;
   clear(body);
   if (!pr) {
-    if (isDefaultBranch(local.branch)) note(body, `${where}${local.branch}, основная ветка: PR нет.`);
-    else note(body, `${where}${local.branch}: PR нет.`, { label: 'Создать PR', run: showCreate });
+    const branch = isolate(local.branch);
+    if (isDefaultBranch(local.branch)) note(body, `${where}${t('mainBranchNoPr', { branch })}`);
+    else note(body, `${where}${t('noPr', { branch })}`, { label: t('createPr'), run: showCreate });
     return;
   }
   const card = box(body, 'bb-stack');
@@ -155,23 +157,23 @@ const load = async () => {
   clear(root);
   if (!connected) {
     mountEmpty(root, {
-      title: 'Bitbucket не подключён',
-      body: 'Откройте Settings → Integrations → Bitbucket и введите email Atlassian и API-токен со скоупами Bitbucket.',
+      title: t('notConnectedTitle'),
+      body: t('notConnectedBody'),
     });
     return;
   }
   if (!directory) {
-    root.append(el('div', 'bb-small bb-muted', 'Откройте проект, чтобы увидеть PR его ветки.'));
+    root.append(el('div', 'bb-small bb-muted', t('openProject')));
     return;
   }
-  mountSpinner(root, { size: 'sm', label: 'Читаю репозиторий…' });
-  let found: string | null;
+  mountSpinner(root, { size: 'sm', label: t('readingRepo') });
+  let found: Detection['note'];
   try {
     ({ repos, note: found } = await detectRepos(host));
   } catch (error) {
     if (mine !== generation) return;
     clear(root);
-    mountBanner(root, { tone: 'error', title: 'Не удалось прочитать git', body: describeError(error) });
+    mountBanner(root, { tone: 'error', title: t('gitReadFailed'), body: describeError(error) });
     return;
   }
   if (mine !== generation) return;
@@ -179,7 +181,7 @@ const load = async () => {
     clear(root);
     current = null;
     publishControls();
-    root.append(el('div', 'bb-small bb-muted', found ?? 'Репозиторий Bitbucket не найден.'));
+    root.append(el('div', 'bb-small bb-muted', t(found ?? 'noRepo')));
     return;
   }
   const saved = await host.storage.get(pickKey(directory)).catch(() => undefined);
@@ -190,9 +192,10 @@ const load = async () => {
 
 const onContext = (context: HostReadyContext) => {
   headerControls = Boolean(context.features?.statusControls);
+  const languageChanged = setLocale(context.locale);
   const nextDirectory = context.directory ?? null;
   const nextConnected = context.connection.connected;
-  if (mounted && nextDirectory === directory && nextConnected === connected) return;
+  if (mounted && !languageChanged && nextDirectory === directory && nextConnected === connected) return;
   mounted = true;
   directory = nextDirectory;
   connected = nextConnected;

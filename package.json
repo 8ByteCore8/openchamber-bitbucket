@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "build": "openchamber-guest-bundle status/main.ts status/main.js && openchamber-guest-bundle panel/main.ts panel/main.js",
-    "check": "tsc --noEmit && openchamber-guest-check"
+    "check": "tsc --noEmit && bun run scripts/check-i18n.ts && openchamber-guest-check"
   },
   "openchamber": {
     "apiVersion": 1,

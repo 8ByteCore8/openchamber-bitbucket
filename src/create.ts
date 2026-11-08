@@ -2,6 +2,7 @@ import type { HostClient } from '@openchamber/sdk';
 import { mountBanner, mountButton, mountCheckbox, mountTextField } from '@openchamber/sdk/ui';
 import { describeError, say, type Api, type PullRequest, type Repo } from './api.ts';
 import { box, clear, el } from './dom.ts';
+import { t } from './i18n/index.ts';
 
 // The "new pull request" form, used in Work Status (for the checked-out
 // branch) and in the panel (for any branch). Fields only, no popups.
@@ -38,39 +39,39 @@ export const mountCreateForm = (parent: HTMLElement, options: CreateFormOptions)
 
   if (options.source === null) {
     const field = mountTextField(box(root), {
-      label: 'Из ветки',
+      label: t('fromBranch'),
       value: state.source,
       mono: true,
       placeholder: 'feature/my-change',
       onChange: (value) => { state.source = value; field.update({ value }); },
     });
   } else {
-    root.append(el('div', 'bb-small bb-muted', `Из ветки ${options.source}`));
+    root.append(el('div', 'bb-small bb-muted', t('fromBranchValue', { branch: options.source })));
   }
   const destination = mountTextField(box(root), {
-    label: 'В ветку',
+    label: t('toBranch'),
     value: '',
     mono: true,
-    placeholder: 'загружаю основную ветку…',
+    placeholder: t('loadingMainBranch'),
     onChange: (value) => { state.destination = value; destination.update({ value }); },
   });
   const title = mountTextField(box(root), {
-    label: 'Заголовок',
+    label: t('title'),
     value: state.title,
     onChange: (value) => { state.title = value; title.update({ value }); },
   });
   const description = mountTextField(box(root), {
-    label: 'Описание',
+    label: t('description'),
     value: '',
     multiline: true,
     rows: 4,
-    placeholder: 'Markdown',
+    placeholder: t('markdown'),
     onChange: (value) => { state.description = value; description.update({ value }); },
   });
   const flags = box(root, 'bb-row');
-  const draft = mountCheckbox(flags, { label: 'Черновик', checked: false, onChange: (checked) => { state.draft = checked; draft.update({ checked }); } });
+  const draft = mountCheckbox(flags, { label: t('draft'), checked: false, onChange: (checked) => { state.draft = checked; draft.update({ checked }); } });
   const closeSource = mountCheckbox(flags, {
-    label: 'Удалить ветку после merge',
+    label: t('deleteBranchAfterMerge'),
     checked: true,
     onChange: (checked) => { state.closeSource = checked; closeSource.update({ checked }); },
   });
@@ -79,12 +80,12 @@ export const mountCreateForm = (parent: HTMLElement, options: CreateFormOptions)
   const buttons = box(root, 'bb-row');
 
   const submit = mountButton(buttons, {
-    label: 'Создать PR',
+    label: t('createPr'),
     size: 'sm',
     onClick: async () => {
       clear(errorRoot);
       if (!state.source.trim() || !state.destination.trim() || !state.title.trim()) {
-        mountBanner(errorRoot, { tone: 'warning', title: 'Заполните ветки и заголовок' });
+        mountBanner(errorRoot, { tone: 'warning', title: t('fillBranchesTitle') });
         return;
       }
       submit.update({ loading: true, disabled: true });
@@ -98,15 +99,15 @@ export const mountCreateForm = (parent: HTMLElement, options: CreateFormOptions)
           draft: state.draft,
           closeSourceBranch: state.closeSource,
         });
-        await say(host, 'success', `Создан PR #${pr.id}`);
+        await say(host, 'success', t('created', { id: pr.id }));
         onCreated(pr);
       } catch (error) {
         submit.update({ loading: false, disabled: false });
-        mountBanner(errorRoot, { tone: 'error', title: 'PR не создан', body: describeError(error, { write: true }) });
+        mountBanner(errorRoot, { tone: 'error', title: t('notCreated'), body: describeError(error, { write: true }) });
       }
     },
   });
-  mountButton(buttons, { label: 'Отмена', variant: 'ghost', size: 'sm', onClick: onCancel });
+  mountButton(buttons, { label: t('cancel'), variant: 'ghost', size: 'sm', onClick: onCancel });
 
   api.repository(repo).then(
     (info) => {
@@ -124,7 +125,7 @@ export const mountCreateForm = (parent: HTMLElement, options: CreateFormOptions)
       defaultReviewers = users;
       if (users.length === 0) return;
       const box = mountCheckbox(reviewersRoot, {
-        label: `Ревьюеры по умолчанию: ${users.map((user) => user.display_name).join(', ')}`,
+        label: t('defaultReviewers', { names: users.map((user) => user.display_name).join(', ') }),
         checked: true,
         onChange: (checked) => { state.defaults = checked; box.update({ checked }); },
       });

@@ -1,4 +1,5 @@
 import { HostRequestError, type HostClient } from '@openchamber/sdk';
+import { t } from './i18n/index.ts';
 
 // Every call goes through host.request: the host adds `Basic email:token` and
 // keeps the request on https://api.bitbucket.org. The host does not follow
@@ -61,14 +62,18 @@ export type MergeStrategy =
   | 'rebase_fast_forward'
   | 'rebase_merge';
 
-export const MERGE_STRATEGY_LABELS: Record<MergeStrategy, string> = {
-  merge_commit: 'Merge commit',
-  squash: 'Squash',
-  fast_forward: 'Fast forward',
-  squash_fast_forward: 'Squash, fast forward',
-  rebase_fast_forward: 'Rebase, fast forward',
-  rebase_merge: 'Rebase, merge',
-};
+const STRATEGY_KEYS = {
+  merge_commit: 'strategy_merge_commit',
+  squash: 'strategy_squash',
+  fast_forward: 'strategy_fast_forward',
+  squash_fast_forward: 'strategy_squash_fast_forward',
+  rebase_fast_forward: 'strategy_rebase_fast_forward',
+  rebase_merge: 'strategy_rebase_merge',
+} as const;
+
+/** A merge strategy in the current language; one Bitbucket adds later shows as is. */
+export const strategyLabel = (strategy: string) =>
+  strategy in STRATEGY_KEYS ? t(STRATEGY_KEYS[strategy as MergeStrategy]) : strategy;
 
 export class BitbucketError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
@@ -93,16 +98,16 @@ const readError = (status: number, body: string): string => {
 export const describeError = (error: unknown, options: { write?: boolean } = {}): string => {
   if (error instanceof HostRequestError) {
     if (error.code === 'HOST_TIMEOUT' && options.write) {
-      return 'Bitbucket не ответил за 20 секунд, но изменение могло примениться. Нажмите «Обновить» и проверьте PR, прежде чем повторять.';
+      return t('errTimeoutWrite');
     }
-    if (error.code === 'DISCONNECTED') return 'Bitbucket не подключён: Settings → Integrations → Bitbucket, email и API-токен.';
-    if (error.code === 'NOT_GRANTED') return 'Расширению не выдано разрешение. Откройте Settings → Extensions → Bitbucket и подтвердите доступ.';
-    if (error.code === 'HOST_TIMEOUT') return 'Bitbucket не ответил за 20 секунд. Попробуйте ещё раз.';
+    if (error.code === 'DISCONNECTED') return t('errDisconnected');
+    if (error.code === 'NOT_GRANTED') return t('errNotGranted');
+    if (error.code === 'HOST_TIMEOUT') return t('errTimeout');
     return error.message;
   }
   if (error instanceof BitbucketError) {
-    if (error.status === 403) return `Токену не хватает прав (403): ${error.message}. Выпустите токен со скоупами Bitbucket для репозиториев и pull requests.`;
-    if (error.status === 404) return 'Bitbucket не нашёл репозиторий или PR (404). Проверьте, что у аккаунта есть к нему доступ.';
+    if (error.status === 403) return t('err403', { detail: error.message });
+    if (error.status === 404) return t('err404');
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
@@ -204,7 +209,7 @@ export const createApi = (host: HostClient) => {
     diff: async (repo: Repo, pr: PullRequest) => {
       const source = pr.source.commit?.hash;
       const destination = pr.destination.commit?.hash;
-      if (!source || !destination) throw new BitbucketError('У PR нет коммитов для диффа.', 0);
+      if (!source || !destination) throw new BitbucketError(t('errNoCommits'), 0);
       const spec = `${repoKey(repo)}:${source}%0D${destination}`;
       const result = await call('GET', `${repoPath(repo)}/diff/${spec}`, {
         query: { from_pullrequest_id: String(pr.id), topic: 'true' },
@@ -288,14 +293,22 @@ export const reviewSummary = (pr: PullRequest) => ({
   changes: pr.participants.filter((participant) => participant.state === 'changes_requested').map((participant) => participant.user.display_name),
 });
 
-/** One badge for the PR's commit statuses (Pipelines and other CI). */
-export const pipelineSummary = (statuses: CommitStatus[]) => {
+export type PipelineState = 'passed' | 'failed' | 'running' | 'stopped';
+
+/** One state for the PR's commit statuses (Pipelines and other CI), worst first. */
+export const pipelineSummary = (statuses: CommitStatus[]): { state: PipelineState; tone: 'success' | 'error' | 'info' | 'warning'; url?: string } | null => {
   if (statuses.length === 0) return null;
-  if (statuses.some((status) => status.state === 'FAILED')) return { label: 'Pipeline: failed', tone: 'error' as const, url: statuses.find((status) => status.state === 'FAILED')?.url };
-  if (statuses.some((status) => status.state === 'INPROGRESS')) return { label: 'Pipeline: running', tone: 'info' as const, url: statuses.find((status) => status.state === 'INPROGRESS')?.url };
-  if (statuses.some((status) => status.state === 'STOPPED')) return { label: 'Pipeline: stopped', tone: 'warning' as const, url: statuses[0]?.url };
-  return { label: 'Pipeline: passed', tone: 'success' as const, url: statuses[0]?.url };
+  const first = (state: CommitStatus['state']) => statuses.find((status) => status.state === state);
+  const failed = first('FAILED');
+  if (failed) return { state: 'failed', tone: 'error', url: failed.url };
+  const running = first('INPROGRESS');
+  if (running) return { state: 'running', tone: 'info', url: running.url };
+  const stopped = first('STOPPED');
+  if (stopped) return { state: 'stopped', tone: 'warning', url: stopped.url };
+  return { state: 'passed', tone: 'success', url: statuses[0]?.url };
 };
+
+export const pipelineStateLabel = (state: PipelineState) => t(`pipeline_${state}`);
 
 /** The composer chip that hands a PR to the agent: description plus as much diff as fits. */
 export const pullRequestChip = (repo: Repo, pr: PullRequest, diff: string) => {

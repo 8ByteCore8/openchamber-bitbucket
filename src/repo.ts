@@ -1,5 +1,6 @@
 import type { HostClient } from '@openchamber/sdk';
 import type { Repo } from './api.ts';
+import type { MessageKey } from './i18n/en.ts';
 
 // Finds the Bitbucket repositories of the open project by reading git's own
 // files with the `files` capability: the project itself and its submodules
@@ -14,7 +15,8 @@ export type LocalRepo = {
   branch: string | null;
 };
 
-export type Detection = { repos: LocalRepo[]; note: string | null };
+/** `note` says, as a message key, why nothing was found. */
+export type Detection = { repos: LocalRepo[]; note: MessageKey | null };
 
 /** `git@bitbucket.org:ws/repo.git`, `git@ssh.bitbucket.org:ws/repo`, `https://user@bitbucket.org/ws/repo.git`, `ssh://git@bitbucket.org/ws/repo.git`. */
 export const parseBitbucketUrl = (url: string): Repo | null => {
@@ -63,9 +65,9 @@ export const detectRepos = async (host: HostClient): Promise<Detection> => {
   const read = (path: string) => host.readFile(path).then((file) => file.content, () => null);
 
   const dotGit = await host.stat('.git').catch(() => null);
-  if (!dotGit || dotGit.kind === 'missing') return { repos: [], note: 'В этой папке нет git-репозитория.' };
+  if (!dotGit || dotGit.kind === 'missing') return { repos: [], note: 'noGit' };
   if (dotGit.kind !== 'directory') {
-    return { repos: [], note: 'Это linked worktree: его git-данные лежат вне проекта, и секция их не читает. Откройте панель Bitbucket и выберите репозиторий там.' };
+    return { repos: [], note: 'linkedWorktree' };
   }
 
   const repos: LocalRepo[] = [];
@@ -96,7 +98,7 @@ export const detectRepos = async (host: HostClient): Promise<Detection> => {
     for (const repo of found) if (repo) repos.push(repo);
   }
 
-  if (repos.length === 0) return { repos, note: 'У репозитория нет remote на bitbucket.org.' };
+  if (repos.length === 0) return { repos, note: 'noBitbucketRemote' };
   return { repos, note: null };
 };
 
