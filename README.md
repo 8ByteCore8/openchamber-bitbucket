@@ -57,4 +57,11 @@ bun run build   # bundles status/main.ts and panel/main.ts into the .js files Op
 bun run check   # tsc + openchamber-guest-check
 ```
 
-The built `status/main.js` and `panel/main.js` are committed on purpose: OpenChamber installs from git without building.
+The built `status/main.js` and `panel/main.js` are committed on purpose: OpenChamber installs from git without building. The **Check** workflow fails when they differ from a fresh build.
+
+## Releasing
+
+1. Raise `version` in `package.json` (OpenChamber offers an update only when it grows), run `bun run build`, commit.
+2. Tag and push: `git tag -a v0.2.0 -m v0.2.0 && git push origin main v0.2.0`.
+
+The **Release** workflow checks that the tag equals the version, builds, runs the checks, and publishes a GitHub release with notes and an installable zip. Users can pin a release with `#v0.2.0` on the install URL.

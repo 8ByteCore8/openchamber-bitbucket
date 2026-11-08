@@ -1,0 +1,69 @@
+name: Release
+
+# Push a tag vX.Y.Z whose version equals package.json's to publish a release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+
+      - name: Tag matches package.json
+        run: |
+          version="$(jq -r .version package.json)"
+          [ "v$version" = "$GITHUB_REF_NAME" ] \
+            || { echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version."; exit 1; }
+
+      - run: bun run build
+      - name: Committed bundles match the sources
+        run: |
+          git diff --exit-code -- panel/main.js status/main.js \
+            || { echo "::error::Run 'bun run build' and commit panel/main.js and status/main.js before tagging."; exit 1; }
+      - run: bun run check
+
+      - name: Package the extension
+        run: |
+          name="openchamber-bitbucket-$GITHUB_REF_NAME"
+          mkdir -p "dist/$name"
+          cp --parents package.json README.md LICENSE icon.svg \
+            panel/index.html panel/main.js status/index.html status/main.js "dist/$name/"
+          bunx openchamber-guest-check "dist/$name"
+          (cd "dist/$name" && zip -qr "../$name.zip" .)
+          echo "ZIP=dist/$name.zip" >> "$GITHUB_ENV"
+
+      - name: Write the release notes
+        run: |
+          previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          {
+            echo "## Install"
+            echo
+            echo "Settings → Extensions → install from URL:"
+            echo
+            echo '```'
+            echo "https://github.com/$GITHUB_REPOSITORY#$GITHUB_REF_NAME"
+            echo '```'
+            echo
+            echo "Without \`#$GITHUB_REF_NAME\` you follow \`main\`. The attached zip installs the same package offline."
+            echo
+            echo "## Changes"
+            echo
+            git log --no-merges --format='- %s' ${previous:+"$previous..$GITHUB_REF_NAME"} ${previous:-"$GITHUB_REF_NAME"}
+          } > notes.md
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$ZIP" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
