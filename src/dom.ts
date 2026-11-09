@@ -30,6 +30,8 @@ html, body { margin: 0; background: var(--oc-bg); color: var(--oc-fg); font-fami
 .bb-comment.reply { margin-left: 16px; }
 .bb-link { color: var(--oc-primary-text); cursor: pointer; }
 .bb-link:hover { text-decoration: underline; }
+.bb-click { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; }
+.bb-click:hover { background: var(--oc-subtle); }
 .bb-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 [hidden] { display: none !important; }
 `;

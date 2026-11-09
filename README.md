@@ -9,10 +9,14 @@ Bitbucket Cloud pull requests inside [OpenChamber](https://openchamber.dev), nex
 - Title, Pipelines result, approvals, requested changes, target branch.
 - Actions that fit your role: **Merge** (with the repository's merge strategies) and **To agent** on your own PR, **Approve** and **Request changes** on someone else's. Draft/ready and **Decline** sit under **More**.
 - No PR for the branch yet: **Create PR** right there.
+- **Whole project** (in the section's repository picker, for a project with submodules): one line per repository that is on a feature branch, with its Pipelines dot and its branch's PR, or "no PR". Repositories on the main branch are only counted. A click opens that PR in the section with the usual buttons; **←** goes back to the list.
 
-**Rail panel "Bitbucket"**: the open pull requests of a repository.
+**Rail panel "Bitbucket"**: open pull requests, for one repository or many at once.
 
-- Tabs: **Mine**, **Awaiting my review**, **All open**, plus search by title.
+- **Whole project**: every Bitbucket repository of the open project, submodules included, in one list. Each row names its repository.
+- **All my PRs**: the pull requests you authored in all your workspaces, including repositories outside the project.
+- One repository at a time, as before.
+- Tabs: **Mine**, **Awaiting my review**, **All open**, plus search (by title; in the combined lists also by repository). **All my PRs** has no tabs: Bitbucket can list your own PRs across a workspace, but not the ones waiting for your review.
 - A pull request in detail: description (editable), diff, general comments with a reply box, reviewers (add and remove from the workspace members).
 - A **New PR** form with the repository's default reviewers.
 
@@ -20,7 +24,7 @@ Bitbucket Cloud pull requests inside [OpenChamber](https://openchamber.dev), nex
 
 ## Repositories it finds
 
-The extension reads the open project's git files: the project itself and its **submodules** (`.git/modules/*`), so a superproject whose pull requests live in submodules works too. When the project has several Bitbucket repositories, it starts with the one on a feature branch and remembers your choice per project. A repository that isn't in the project can be opened by hand as `workspace/repo`.
+The extension reads the open project's git files: the project itself and its **submodules** (`.git/modules/*`), so a superproject whose pull requests live in submodules works too. When the project has several Bitbucket repositories, the panel opens on **Whole project** and the Work Status section on the repository with a feature branch; both remember your choice per project. **Whole project** asks Bitbucket once per repository, side by side; a repository that does not answer is named under the list, the others still show. A repository that isn't in the project can be opened by hand as `workspace/repo`.
 
 ## Setup
 

@@ -17,6 +17,7 @@ import {
   createApi,
   describeError,
   repoKey,
+  repoOfPullRequest,
   say,
   type Comment,
   type CommitStatus,
@@ -32,7 +33,8 @@ import { detectRepos, isDefaultBranch, localId, localLabel, pickKey, preferredRe
 import { renderPrSummary } from '../src/summary.ts';
 
 // Rail panel: the open PRs of a repository (mine, awaiting my review, all),
-// one PR in detail (description, diff, comments, reviewers, edit), and the
+// of every repository of the project at once, or the user's own PRs across
+// all workspaces; one PR in detail (description, diff, comments, reviewers, edit), and the
 // new PR form. Reads happen on open, on a switch and on "Refresh" only.
 // Text follows OpenChamber's language.
 
@@ -45,9 +47,16 @@ installStyle();
 
 type Filter = 'mine' | 'review' | 'open';
 type Choice = { id: string; repo: Repo; local: LocalRepo | null };
+/** One repository, every repository of the project, or the user's PRs in all workspaces. */
+type Scope = 'repo' | 'project' | 'account';
+type Row = { repo: Repo; pr: PullRequest };
 
 const MANUAL_KEY = 'manual-repos';
 const OTHER = '__other__';
+const PROJECT = '__project__';
+const ACCOUNT = '__account__';
+/** Kept apart from the repository pick, which the Work Status section shares. */
+const scopeKey = (dir: string) => pickKey(dir).replace(/^repo:/, 'scope:');
 
 let mounted = false;
 let directory: string | null = null;
@@ -55,6 +64,7 @@ let connected = false;
 let generation = 0;
 let choices: Choice[] = [];
 let current: Choice | null = null;
+let scope: Scope = 'repo';
 let filter: Filter = 'mine';
 let search = '';
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -67,14 +77,24 @@ const parseRepo = (text: string): Repo | null => {
 
 /* ---------- repository choice ---------- */
 
+const localChoices = () => choices.filter((choice) => choice.local);
+
+const setScope = (next: Scope) => {
+  scope = next;
+  if (directory) void host.storage.set(scopeKey(directory), next).catch(() => {});
+};
+
 const repoBar = (parent: HTMLElement) => {
   const row = box(parent, 'bb-row');
   const holder = box(row, 'bb-grow');
+  const locals = localChoices().length;
   mountSelect(holder, {
-    value: current?.id ?? null,
+    value: scope === 'project' ? PROJECT : scope === 'account' ? ACCOUNT : current?.id ?? null,
     placeholder: t('repository'),
     searchable: choices.length > 6,
     options: [
+      ...(locals > 1 ? [{ id: PROJECT, label: t('scopeProject', { count: locals }), hint: t('scopeProjectHint') }] : []),
+      { id: ACCOUNT, label: t('scopeAccount'), hint: t('scopeAccountHint') },
       ...choices.map((choice) => ({
         id: choice.id,
         label: choice.local ? localLabel(choice.local) : repoKey(choice.repo),
@@ -87,12 +107,18 @@ const repoBar = (parent: HTMLElement) => {
         showManual();
         return;
       }
+      if (id === PROJECT || id === ACCOUNT) {
+        setScope(id === PROJECT ? 'project' : 'account');
+        void showList();
+        return;
+      }
       current = choices.find((choice) => choice.id === id) ?? current;
+      setScope('repo');
       if (directory && current?.local) void host.storage.set(pickKey(directory), current.id).catch(() => {});
       void showList();
     },
   });
-  mountButton(row, { label: t('newPr'), size: 'sm', variant: 'outline', onClick: showCreate });
+  if (scope === 'repo') mountButton(row, { label: t('newPr'), size: 'sm', variant: 'outline', onClick: showCreate });
   mountButton(row, { label: t('refresh'), size: 'sm', variant: 'ghost', onClick: () => void load() });
 };
 
@@ -125,70 +151,122 @@ const showManual = () => {
         await host.storage.set(MANUAL_KEY, manual).catch(() => {});
       }
       current = choices.find((choice) => choice.id === id) ?? null;
+      setScope('repo');
       void showList();
     },
   });
   if (choices.length > 0) mountButton(row, { label: t('back'), size: 'sm', variant: 'ghost', onClick: () => void showList() });
+  else mountButton(row, { label: t('scopeAccount'), size: 'sm', variant: 'ghost', onClick: () => { setScope('account'); void showList(); } });
 };
 
 /* ---------- list ---------- */
 
+/** PRs of the scope, newest first, and the repositories that did not answer. */
+const fetchRows = async (choice: Choice | null): Promise<{ rows: Row[]; failed: string[]; error: unknown }> => {
+  if (scope === 'repo') {
+    const repo = choice!.repo;
+    const prs = await api.listPullRequests(repo, filter, search.trim());
+    return { rows: prs.map((pr) => ({ repo, pr })), failed: [], error: null };
+  }
+  // One request per repository (or workspace), side by side; one that fails
+  // is named under the list instead of hiding the others.
+  const targets = scope === 'project'
+    ? localChoices().map((choice) => ({ label: rowLabel(choice.repo), load: () => api.listPullRequests(choice.repo, filter) }))
+    : (await api.workspaces()).map((workspace) => ({ label: workspace, load: () => api.myPullRequestsIn(workspace) }));
+  const results = await Promise.allSettled(targets.map((target) => target.load()));
+  const rows: Row[] = [];
+  const failed: string[] = [];
+  let error: unknown = null;
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      failed.push(targets[index]!.label);
+      error ??= result.reason;
+      return;
+    }
+    for (const pr of result.value) {
+      const repo = repoOfPullRequest(pr);
+      if (repo) rows.push({ repo, pr });
+    }
+  });
+  if (rows.length === 0 && failed.length === targets.length && error) throw error;
+  rows.sort((a, b) => b.pr.updated_on.localeCompare(a.pr.updated_on));
+  return { rows, failed, error };
+};
+
+/** The submodule path for a project repository, else the repository's slug. */
+const rowLabel = (repo: Repo) => {
+  const local = choices.find((choice) => choice.local && repoKey(choice.repo) === repoKey(repo))?.local;
+  return local?.path || repo.slug;
+};
+
 const showList = async () => {
   const mine = ++generation;
   clear(root);
-  if (!current) {
+  if (scope === 'project' && localChoices().length < 2) scope = 'repo';
+  if (scope === 'repo' && !current) {
     showManual();
     return;
   }
-  const repo = current.repo;
+  const choice = current;
+  const many = scope !== 'repo';
   repoBar(root);
-  const tabsRoot = box(root);
-  const tabs = mountTabs(tabsRoot, {
-    activeId: filter,
-    items: [
-      { id: 'mine', label: t('tabMine') },
-      { id: 'review', label: t('tabReview') },
-      { id: 'open', label: t('tabOpen') },
-    ],
-    onChange: (id) => {
-      filter = id as Filter;
-      tabs.update({ activeId: filter });
-      void fill();
-    },
-  });
+  if (scope !== 'account') {
+    const tabs = mountTabs(box(root), {
+      activeId: filter,
+      items: [
+        { id: 'mine', label: t('tabMine') },
+        { id: 'review', label: t('tabReview') },
+        { id: 'open', label: t('tabOpen') },
+      ],
+      onChange: (id) => {
+        filter = id as Filter;
+        tabs.update({ activeId: filter });
+        void fill();
+      },
+    });
+  }
   mountSearchField(box(root), {
     value: search,
     placeholder: t('searchTitle'),
     onChange: (value) => {
       search = value;
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => void fill(), 400);
+      // Many repositories: filter what is loaded instead of asking each again.
+      if (many) draw();
+      else searchTimer = setTimeout(() => void fill(), 400);
     },
   });
   const listRoot = box(root);
+  const effective = (): Filter => (scope === 'account' ? 'mine' : filter);
+  let loaded: { rows: Row[]; failed: string[] } = { rows: [], failed: [] };
 
-  const fill = async () => {
-    const mineFill = ++generation;
+  const draw = () => {
     clear(listRoot);
-    mountSpinner(listRoot, { size: 'sm', label: t('loadingPrs') });
-    try {
-      const prs = await api.listPullRequests(repo, filter, search.trim());
-      if (mineFill !== generation) return;
-      clear(listRoot);
-      if (prs.length === 0) {
-        const why = search ? t('emptySearch')
-          : filter === 'mine' ? t('emptyMine')
-          : filter === 'review' ? t('emptyReview')
-          : t('emptyOpen');
-        mountEmpty(listRoot, { title: t('noPrs'), body: why, action: { label: t('createPr'), onClick: showCreate } });
-        return;
-      }
+    const query = search.trim().toLowerCase();
+    const rows = many && query
+      ? loaded.rows.filter((row) => `${row.pr.title}\n${rowLabel(row.repo)}`.toLowerCase().includes(query))
+      : loaded.rows;
+    if (rows.length === 0) {
+      const which = effective();
+      const why = search ? t('emptySearch')
+        : scope === 'account' ? t('emptyMineAccount')
+        : which === 'review' ? t('emptyReview')
+        : scope === 'project' ? (which === 'mine' ? t('emptyMineProject') : t('emptyOpenProject'))
+        : which === 'mine' ? t('emptyMine') : t('emptyOpen');
+      mountEmpty(listRoot, { title: t('noPrs'), body: why, action: many ? undefined : { label: t('createPr'), onClick: showCreate } });
+    } else {
+      const byId = new Map(rows.map((row) => [`${repoKey(row.repo)}#${row.pr.id}`, row]));
+      const showAuthor = effective() !== 'mine';
       mountList(listRoot, {
         ariaLabel: t('pullRequests'),
-        items: prs.map((pr) => ({
-          id: String(pr.id),
+        items: [...byId].map(([id, { repo, pr }]) => ({
+          id,
           title: `#${pr.id} ${pr.title}`,
-          subtitle: `${isolate(`${pr.source.branch.name} → ${pr.destination.branch.name}`)} · ${pr.author.display_name}`,
+          subtitle: [
+            many ? isolate(rowLabel(repo)) : null,
+            isolate(`${pr.source.branch.name} → ${pr.destination.branch.name}`),
+            showAuthor ? pr.author.display_name : null,
+          ].filter(Boolean).join(' · '),
           meta: relativeTime(pr.updated_on),
           badge: pr.draft
             ? { label: t('listDraft'), tone: 'neutral' as const }
@@ -198,8 +276,24 @@ const showList = async () => {
                 ? { label: t('listApproved'), tone: 'success' as const }
                 : undefined,
         })),
-        onSelect: (id) => void showDetail(repo, Number(id)),
+        onSelect: (id) => {
+          const row = byId.get(id);
+          if (row) void showDetail(row.repo, row.pr.id);
+        },
       });
+    }
+    if (loaded.failed.length > 0) listRoot.append(el('div', 'bb-small bb-muted', t('notLoaded', { repos: loaded.failed.join(', ') })));
+  };
+
+  const fill = async () => {
+    const mineFill = ++generation;
+    clear(listRoot);
+    mountSpinner(listRoot, { size: 'sm', label: t('loadingPrs') });
+    try {
+      const result = await fetchRows(choice);
+      if (mineFill !== generation) return;
+      loaded = result;
+      draw();
     } catch (error) {
       if (mineFill !== generation) return;
       clear(listRoot);
@@ -502,10 +596,11 @@ const load = async () => {
     return;
   }
   mountSpinner(root, { size: 'sm', label: t('findingRepos') });
-  const [detection, manual, saved] = await Promise.all([
+  const [detection, manual, saved, savedScope] = await Promise.all([
     directory ? detectRepos(host).catch(() => ({ repos: [], note: null })) : Promise.resolve({ repos: [] as LocalRepo[], note: null }),
     host.storage.get(MANUAL_KEY).catch(() => undefined),
     directory ? host.storage.get(pickKey(directory)).catch(() => undefined) : Promise.resolve(undefined),
+    directory ? host.storage.get(scopeKey(directory)).catch(() => undefined) : Promise.resolve(undefined),
   ]);
   if (mine !== generation) return;
   choices = detection.repos.map((local) => ({ id: localId(local), repo: local.repo, local }));
@@ -518,6 +613,10 @@ const load = async () => {
     ?? choices.find((choice) => choice.local === preferred && preferred !== null)
     ?? choices[0]
     ?? null;
+  // A project with submodules opens on all of its repositories.
+  scope = savedScope === 'repo' || savedScope === 'project' || savedScope === 'account'
+    ? savedScope
+    : detection.repos.length > 1 ? 'project' : 'repo';
   await showList();
 };
 

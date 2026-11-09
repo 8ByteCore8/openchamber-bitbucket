@@ -45,7 +45,7 @@ export const renderPrSummary = (parent: HTMLElement, host: HostClient, pr: PullR
   return root;
 };
 
-const TONE_COLOR = { success: 'var(--oc-success-text)', error: 'var(--oc-error-text)', warning: 'var(--oc-warning-text)', info: 'var(--oc-info-text)' };
+export const TONE_COLOR = { success: 'var(--oc-success-text)', error: 'var(--oc-error-text)', warning: 'var(--oc-warning-text)', info: 'var(--oc-info-text)' };
 
 /**
  * Two lines for Work Status: the title cut to one line (full text on hover),

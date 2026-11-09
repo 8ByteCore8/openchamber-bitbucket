@@ -26,7 +26,7 @@ export type PullRequest = {
   draft: boolean;
   author: User;
   source: { branch: { name: string }; commit?: { hash: string } };
-  destination: { branch: { name: string }; commit?: { hash: string } };
+  destination: { branch: { name: string }; commit?: { hash: string }; repository?: { full_name: string } };
   reviewers: User[];
   participants: Participant[];
   comment_count: number;
@@ -82,6 +82,9 @@ export class BitbucketError extends Error {
 }
 
 type Page<T> = { values: T[]; next?: string; size?: number };
+
+/** List answers may leave out participants and reviewers; the code reads them as arrays. */
+const withLists = (pr: PullRequest): PullRequest => ({ ...pr, participants: pr.participants ?? [], reviewers: pr.reviewers ?? [] });
 
 const readError = (status: number, body: string): string => {
   try {
@@ -177,7 +180,27 @@ export const createApi = (host: HostClient) => {
         // The list answers short PR objects without participants and reviewers; ask for them.
         query: { q: clauses.join(' AND '), pagelen: '50', sort: '-updated_on', fields: '+values.participants,+values.reviewers' },
       });
-      return page.values.map((pr) => ({ ...pr, participants: pr.participants ?? [], reviewers: pr.reviewers ?? [] }));
+      return page.values.map(withLists);
+    },
+
+    /** Slugs of the workspaces the user is a member of. */
+    workspaces: async () => {
+      const page = await json<Page<{ workspace: { slug: string } }>>('GET', '/user/workspaces', {
+        query: { pagelen: '100', fields: 'values.workspace.slug' },
+      });
+      return page.values.map((entry) => entry.workspace.slug.toLowerCase());
+    },
+
+    /**
+     * The user's open PRs in every repository of a workspace, in one call.
+     * Bitbucket has no such endpoint for reviews: those are asked per repository.
+     */
+    myPullRequestsIn: async (workspace: string) => {
+      const user = await getMe();
+      const page = await json<Page<PullRequest>>('GET', `/workspaces/${encodeURIComponent(workspace)}/pullrequests/${encodeURIComponent(user.uuid)}`, {
+        query: { q: 'state = "OPEN"', pagelen: '50', sort: '-updated_on', fields: '+values.participants,+values.reviewers' },
+      });
+      return page.values.map(withLists);
     },
 
     /** The open PR whose source is `branch`, or null. */
@@ -187,6 +210,15 @@ export const createApi = (host: HostClient) => {
       });
       const found = page.values[0];
       return found ? json<PullRequest>('GET', prPath(repo, found.id)) : null;
+    },
+
+    /** The open PR of `branch` as the list answers it (with participants), or null. One call. */
+    branchPullRequest: async (repo: Repo, branch: string) => {
+      const page = await json<Page<PullRequest>>('GET', `${repoPath(repo)}/pullrequests`, {
+        query: { q: `source.branch.name = ${quote(branch)} AND state = "OPEN"`, pagelen: '1', fields: '+values.participants,+values.reviewers' },
+      });
+      const found = page.values[0];
+      return found ? withLists(found) : null;
     },
 
     pullRequest: (repo: Repo, id: number) => json<PullRequest>('GET', prPath(repo, id)),
@@ -281,6 +313,12 @@ export const createApi = (host: HostClient) => {
 };
 
 export type Api = ReturnType<typeof createApi>;
+
+/** The repository a PR from a list belongs to, read from its destination. */
+export const repoOfPullRequest = (pr: PullRequest): Repo | null => {
+  const [workspace, slug, extra] = (pr.destination.repository?.full_name ?? '').toLowerCase().split('/');
+  return workspace && slug && extra === undefined ? { workspace, slug } : null;
+};
 
 /** The state of the current user's review on a PR. */
 export const myReview = (pr: PullRequest, uuid: string) => {

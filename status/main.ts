@@ -1,14 +1,16 @@
 import { connectHost, type GuestStatusControl, type HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady, mountBanner, mountButton, mountEmpty, mountList, mountSpinner } from '@openchamber/sdk/ui';
-import { createApi, describeError, repoKey, type CommitStatus, type PullRequest } from '../src/api.ts';
+import { createApi, describeError, pipelineStateLabel, pipelineSummary, repoKey, reviewSummary, type CommitStatus, type PullRequest } from '../src/api.ts';
 import { mountPrActions } from '../src/actions.ts';
 import { mountCreateForm } from '../src/create.ts';
 import { box, clear, el, installStyle } from '../src/dom.ts';
 import { isolate, setLocale, t } from '../src/i18n/index.ts';
 import { detectRepos, isDefaultBranch, localId, localLabel, pickKey, preferredRepo, type Detection, type LocalRepo } from '../src/repo.ts';
-import { renderPrCompact } from '../src/summary.ts';
+import { renderPrCompact, TONE_COLOR } from '../src/summary.ts';
 
-// Work Status section: the PR of the branch checked out in the open project.
+// Work Status section: the PR of the branch checked out in the open project,
+// or, in "Whole project" mode, one line per repository that is on a feature
+// branch with that branch's PR; a click opens it here with the usual buttons.
 // It reads Bitbucket when it appears, when the project or the connection
 // changes, and on "Refresh"; it never polls. Repository and "Refresh" go
 // into the section header when the host supports header controls, so the
@@ -28,48 +30,73 @@ let generation = 0;
 let repos: LocalRepo[] = [];
 let current: LocalRepo | null = null;
 let headerControls = false;
+/** "Whole project": the PRs of the branches checked out in every repository. */
+let project = false;
+/** A PR opened from the "Whole project" list: Back returns to the list. */
+let fromProject = false;
+
+const PROJECT = '__project__';
+/** Separate from the repository pick, which the panel shares. */
+const modeKey = (dir: string) => pickKey(dir).replace(/^repo:/, 'status:');
+/** The host allows 16 options; "Whole project" takes one. */
+const SELECT_MAX = 15;
 
 new ResizeObserver(() => {
   void host.setHeight(Math.ceil(root.getBoundingClientRect().height)).catch(() => {});
 }).observe(root);
 
+const setProject = (on: boolean) => {
+  project = on;
+  if (directory) void host.storage.set(modeKey(directory), on ? 'project' : 'repo').catch(() => {});
+};
+
 const choose = (id: string) => {
+  if (id === PROJECT) {
+    setProject(true);
+    void showProject();
+    return;
+  }
   const next = repos.find((local) => localId(local) === id);
   if (!next) return;
   current = next;
+  fromProject = false;
+  setProject(false);
   if (directory) void host.storage.set(pickKey(directory), id).catch(() => {});
   void showPullRequest();
 };
 
 // Registered synchronously, as the host requires.
 host.onStatusControl(({ id, value }) => {
-  if (id === 'refresh') void load();
+  if (id === 'refresh') void (fromProject ? showPullRequest() : load());
   if (id === 'repo' && value) choose(value);
 });
 
 const publishControls = () => {
   if (!headerControls) return;
   const controls: GuestStatusControl[] = [];
-  if (repos.length > 1 && current && repos.length <= 16) {
+  if (repos.length > 1 && current && repos.length <= SELECT_MAX) {
     controls.push({
       kind: 'select',
       id: 'repo',
       label: t('repository'),
-      value: localId(current),
-      options: repos.map((local) => ({ value: localId(local), label: localLabel(local).slice(0, 60) })),
+      value: project ? PROJECT : localId(current),
+      options: [
+        { value: PROJECT, label: t('scopeProject', { count: repos.length }).slice(0, 60) },
+        ...repos.map((local) => ({ value: localId(local), label: localLabel(local).slice(0, 60) })),
+      ],
     });
   }
   controls.push({ kind: 'button', id: 'refresh', label: t('refresh') });
   host.setStatusControls(controls).catch(() => {
     headerControls = false;
-    void showPullRequest();
+    void (project && !fromProject ? showProject() : showPullRequest());
   });
 };
 
 /** Body entries for what the header would hold on hosts without header controls. */
 const fallbackExtras = () => {
   const extras: { label: string; run: () => void }[] = [];
-  if (repos.length > 1 && (!headerControls || repos.length > 16)) extras.push({ label: t('repository'), run: showPicker });
+  if (repos.length > 1 && (!headerControls || repos.length > SELECT_MAX)) extras.push({ label: t('repository'), run: showPicker });
   if (!headerControls) extras.push({ label: t('refresh'), run: () => void load() });
   return extras;
 };
@@ -80,11 +107,14 @@ const showPicker = () => {
   root.append(el('div', 'bb-small bb-muted', t('pickRepo')));
   mountList(box(root), {
     ariaLabel: t('projectRepos'),
-    items: repos.map((local) => ({ id: localId(local), title: localLabel(local), subtitle: repoKey(local.repo) })),
-    selectedId: current ? localId(current) : undefined,
+    items: [
+      { id: PROJECT, title: t('scopeProject', { count: repos.length }), subtitle: t('scopeProjectHint') },
+      ...repos.map((local) => ({ id: localId(local), title: localLabel(local), subtitle: repoKey(local.repo) })),
+    ],
+    selectedId: project ? PROJECT : current ? localId(current) : undefined,
     onSelect: choose,
   });
-  mountButton(box(root, 'bb-row'), { label: t('back'), variant: 'ghost', size: 'xs', onClick: () => void showPullRequest() });
+  mountButton(box(root, 'bb-row'), { label: t('back'), variant: 'ghost', size: 'xs', onClick: () => void (project && !fromProject ? showProject() : showPullRequest()) });
 };
 
 const showCreate = () => {
@@ -109,12 +139,74 @@ const note = (parent: HTMLElement, text: string, action?: { label: string; run: 
   for (const extra of fallbackExtras()) mountButton(row, { label: extra.label, size: 'xs', variant: 'ghost', onClick: extra.run });
 };
 
+/** One line per repository on a feature branch: pipeline, where, PR; the rest are counted. */
+const showProject = async () => {
+  const mine = ++generation;
+  fromProject = false;
+  clear(root);
+  publishControls();
+  const working = repos.filter((local) => local.branch && !isDefaultBranch(local.branch));
+  const resting = repos.length - working.length;
+  if (working.length === 0) {
+    note(root, t('projectNothing'));
+    return;
+  }
+  const list = box(root, 'bb-stack');
+  list.style.gap = '2px';
+  mountSpinner(list, { size: 'sm', label: t('findingPr') });
+  const results = await Promise.allSettled(working.map(async (local) => {
+    const pr = await api.branchPullRequest(local.repo, local.branch!);
+    const statuses = pr ? await api.statuses(local.repo, pr.id).catch(() => null) : null;
+    return { pr, statuses };
+  }));
+  if (mine !== generation) return;
+  clear(list);
+  results.forEach((result, index) => {
+    const local = working[index]!;
+    const row = box(list, 'bb-row bb-small bb-click');
+    row.style.flexWrap = 'nowrap';
+    const span = (text: string, className?: string, color?: string) => {
+      const node = row.appendChild(el('span', className, text));
+      if (color) node.style.color = color;
+      return node;
+    };
+    const where = isolate(local.path || local.repo.slug);
+    if (result.status === 'rejected') {
+      span(where, 'bb-muted');
+      span(t('noAnswer'), 'bb-ellipsis', TONE_COLOR.error).title = describeError(result.reason);
+    } else if (!result.value.pr) {
+      span(where, 'bb-muted');
+      span(`${isolate(local.branch!)} · ${t('noPrShort')}`, 'bb-ellipsis bb-muted');
+    } else {
+      const { pr, statuses } = result.value;
+      const pipeline = statuses ? pipelineSummary(statuses) : null;
+      const dot = span('●', undefined, pipeline ? TONE_COLOR[pipeline.tone] : 'var(--oc-muted)');
+      dot.title = pipeline ? t('pipeline', { state: pipelineStateLabel(pipeline.state) }) : '';
+      span(where, 'bb-muted');
+      span(`#${pr.id} ${pr.title}`, 'bb-grow bb-ellipsis').title = pr.title;
+      const { approvals, changes } = reviewSummary(pr);
+      if (changes.length > 0) span(`✗ ${changes.length}`, undefined, TONE_COLOR.warning).title = t('changesBy', { names: changes.join(', ') });
+      if (approvals.length > 0) span(`✓ ${approvals.length}`, undefined, TONE_COLOR.success).title = t('approvedBy', { names: approvals.join(', ') });
+      if (pr.draft) span(t('listDraft'), 'bb-muted');
+    }
+    row.addEventListener('click', () => {
+      current = local;
+      fromProject = true;
+      void showPullRequest();
+    });
+  });
+  if (resting > 0 || fallbackExtras().length > 0) note(root, resting > 0 ? t('projectOnMain', { count: resting }) : '');
+};
+
 const showPullRequest = async () => {
   const mine = ++generation;
   clear(root);
   publishControls();
   const local = current;
   if (!local) return;
+  if (fromProject) {
+    mountButton(box(root, 'bb-row'), { label: `← ${t('scopeProject', { count: repos.length })}`, variant: 'ghost', size: 'xs', onClick: () => void showProject() });
+  }
   const where = local.path ? `${isolate(local.path)}: ` : '';
   if (!local.branch) {
     note(root, `${where}${t('detached')}`);
@@ -184,10 +276,15 @@ const load = async () => {
     root.append(el('div', 'bb-small bb-muted', t(found ?? 'noRepo')));
     return;
   }
-  const saved = await host.storage.get(pickKey(directory)).catch(() => undefined);
+  const [saved, mode] = await Promise.all([
+    host.storage.get(pickKey(directory)).catch(() => undefined),
+    host.storage.get(modeKey(directory)).catch(() => undefined),
+  ]);
   if (mine !== generation) return;
   current = repos.find((local) => localId(local) === saved) ?? preferredRepo(repos);
-  await showPullRequest();
+  project = mode === 'project' && repos.length > 1;
+  fromProject = false;
+  await (project ? showProject() : showPullRequest());
 };
 
 const onContext = (context: HostReadyContext) => {
